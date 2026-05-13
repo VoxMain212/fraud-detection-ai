@@ -12,7 +12,7 @@ MODEL_PATH = os.path.join("notebooks", "models", "fraud_model.pkl")
 if not os.path.exists(MODEL_PATH):
     raise FileNotFoundError(
         f"❌ Файл {MODEL_PATH} не найден.\n"
-        "Сначала запустите все ячейки в notebook/fraud_detection.ipynb, чтобы обучить и сохранить модель."
+        "Убедитесь, что модель обучена на новом датасете и сохранена по этому пути."
     )
 
 artifacts = joblib.load(MODEL_PATH)
@@ -22,7 +22,7 @@ le_loc = artifacts['le_loc']
 le_dev = artifacts['le_dev']
 metrics = artifacts['metrics']
 
-# 🔹 HTML-шаблон веб-интерфейса
+# 🔹 HTML-шаблон (без изменений в структуре, только логика)
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -52,19 +52,19 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <h1>🔍 Детектор мошенничества</h1>
-        <p class="subtitle">Заполните параметры транзакции для анализа</p>
+        <p class="subtitle">Анализ транзакции по новым параметрам</p>
         
         <form method="POST">
             <div class="form-group">
-                <label>💰 Сумма транзакции (₽)</label>
-                <input type="number" step="0.01" name="amount" required placeholder="Например: 3500.50">
+                <label>💰 Сумма (amount)</label>
+                <input type="number" step="0.01" name="amount" required placeholder="Введите сумму">
             </div>
             <div class="form-group">
-                <label>⏰ Время операции (0–23)</label>
-                <input type="number" name="time" min="0" max="23" step="1" required placeholder="Например: 14">
+                <label>⏰ Время (0–23)</label>
+                <input type="number" name="time" min="0" max="23" step="1" required>
             </div>
             <div class="form-group">
-                <label>📍 Местоположение</label>
+                <label>📍 Локация</label>
                 <select name="location" required>
                     {% for loc in locations %}<option value="{{ loc }}">{{ loc }}</option>{% endfor %}
                 </select>
@@ -75,26 +75,26 @@ HTML_TEMPLATE = """
                     {% for dev in devices %}<option value="{{ dev }}">{{ dev }}</option>{% endfor %}
                 </select>
             </div>
-            <button type="submit">🚀 Проверить транзакцию</button>
+            <button type="submit">🚀 Проверить</button>
         </form>
 
         {% if result %}
         <div class="result-box {{ 'fraud' if result.is_fraud else 'safe' }}">
             {% if result.is_fraud %}
-                ⚠️ <b>ВЫСОКИЙ РИСК МОШЕННИЧЕСТВА</b><br>
+                ⚠️ <b>РИСК МОШЕННИЧЕСТВА</b><br>
             {% else %}
-                ✅ <b>ТРАНЗАКЦИЯ БЕЗОПАСНА</b><br>
+                ✅ <b>БЕЗОПАСНО</b><br>
             {% endif %}
             Вероятность: <b>{{ "%.1f"|format(result.prob*100) }}%</b>
         </div>
         {% endif %}
 
         {% if error %}
-        <div class="error">❌ Ошибка: {{ error }}</div>
+        <div class="error">❌ {{ error }}</div>
         {% endif %}
 
         <div class="metrics">
-            Модель: {{ model_name }} | ROC-AUC: {{ "%.3f"|format(auc) }} | F1-Score: {{ "%.3f"|format(f1) }}
+            ROC-AUC: {{ "%.3f"|format(auc) }} | F1-Score: {{ "%.3f"|format(f1) }}
         </div>
     </div>
 </body>
@@ -108,32 +108,31 @@ def index():
 
     if request.method == "POST":
         try:
+            # Получаем данные из формы
             amount = float(request.form["amount"])
             time = float(request.form["time"])
             location = request.form["location"]
             device = request.form["device"]
 
-            # Кодирование категориальных признаков (используем те же LabelEncoder)
+            # Кодируем категории через загруженные LabelEncoders
             loc_enc = le_loc.transform([location])[0]
             dev_enc = le_dev.transform([device])[0]
 
-            # Формируем DataFrame в точном соответствии с обучением
+            # Создаем DataFrame (БЕЗ id и category, только нужные признаки)
             input_df = pd.DataFrame(
                 [[amount, time, loc_enc, dev_enc]], 
                 columns=["amount", "time", "location_enc", "device_enc"]
             )
 
-            # Масштабирование и предсказание
+            # Масштабируем признаки и делаем предсказание
             input_scaled = scaler.transform(input_df)
             pred_label = model.predict(input_scaled)[0]
             prob_fraud = model.predict_proba(input_scaled)[0][1]
 
             result = {"prob": prob_fraud, "is_fraud": bool(pred_label == 1)}
 
-        except ValueError as e:
-            error = f"Некорректные данные. Проверьте поля ввода. ({str(e)})"
         except Exception as e:
-            error = f"Ошибка обработки запроса: {str(e)}"
+            error = f"Ошибка: {str(e)}"
 
     return render_template_string(
         HTML_TEMPLATE,
@@ -141,11 +140,9 @@ def index():
         devices=list(le_dev.classes_),
         result=result,
         error=error,
-        model_name="Ensemble Classifier",
         auc=metrics.get("ROC-AUC", 0),
         f1=metrics.get("F1-Score", 0)
     )
 
 if __name__ == "__main__":
-    print("🌐 Запуск веб-сервиса: http://127.0.0.1:5000")
     app.run(debug=True, host="127.0.0.1", port=5000)
